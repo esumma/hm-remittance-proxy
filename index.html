@@ -727,7 +727,7 @@ Rules:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 8000,
       messages: [{
         role: 'user',
         content: [
@@ -784,7 +784,7 @@ If you cannot connect to QuickBooks, return sample data for testing with 3-4 rea
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 8000,
       messages: [{ role: 'user', content: prompt }],
       mcp_servers: [{
         type: 'url',
@@ -1011,7 +1011,7 @@ If you cannot complete this, return {"success": false, "message": "reason"}.`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
+        max_tokens: 8000,
         messages: [{ role: 'user', content: postPrompt }],
         mcp_servers: [{
           type: 'url',
