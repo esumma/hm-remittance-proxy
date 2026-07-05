@@ -581,7 +581,7 @@
 // ─── Config ──────────────────────────────────────────────────────────────────
 // After deploying your Cloudflare Worker, paste its URL here:
 // e.g. 'https://hm-remittance-proxy.YOUR-SUBDOMAIN.workers.dev/proxy'
-const API_URL = 'https://hm-proxy.esumma.workers.dev/proxy';
+const API_URL = 'https://hm-remittance-proxy.esumma.workers.dev/proxy';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let state = {
@@ -666,46 +666,68 @@ async function runPipeline() {
 
 // ─── AI Extraction ────────────────────────────────────────────────────────────
 async function extractRemittanceData(base64Pdf) {
-  const prompt = `You are a remittance processing assistant for H&M Plating Co., an industrial surface finishing company.
+  const prompt = `You are a remittance processing assistant for H&M Plating Co. (also known as H&M ELP LLC, H&M ELP INC, H&M Plating, ZAHMP), an industrial surface finishing company based in Houston TX.
 
-Analyze this remittance advice PDF and extract ALL payment and invoice information.
+This PDF may contain multiple pages and multiple document types including:
+- Action Capital Corporation cash reports (columns: Invoice Number, Cash Received, Escrow, Deduct, Invoices Applied, Source)
+- EFT Remittance Advice documents from customers like TAQA, Precision Drilling, etc.
+- Bill Payment documents
+- Wells Fargo ACH transaction details
+- Raw EDI/ACH data (ST*820 segments — ignore these)
 
-Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
+Your job: Find the PRIMARY remittance document(s) and extract all invoice payment data.
+
+PRIORITY ORDER for identifying the main remittance:
+1. Look for "EFT REMITTANCE ADVICE" pages first — these have the clearest invoice data
+2. Look for Action Capital cash report pages (titled "Cash Report For...")
+3. Look for "Bill Payment" or "Payment Advice" pages
+
+For Action Capital cash reports:
+- The "Source" column shows the customer name in format [HMP####]Customer Name
+- "Invoices Applied" column = the amount being applied to each invoice
+- Lines where "Invoices Applied" = 0.00 (fully escrowed) should still be included with appliedAmount = 0
+- The check total is at the bottom: "Check = $XXX"
+
+Return ONLY valid JSON (no markdown, no explanation):
 {
-  "payerName": "Customer company name",
-  "payerAddress": "Address if present",
-  "checkNumber": "Check or wire reference number",
+  "payerName": "Primary customer name (from Source column or Remitted To field)",
+  "payerAddress": "Address if present or null",
+  "checkNumber": "Check/ACH/wire reference number",
   "paymentDate": "YYYY-MM-DD",
   "totalPaymentAmount": 0.00,
   "currency": "USD",
-  "bankReference": "ACH/wire ref if present",
+  "bankReference": "ACH ref if present or null",
+  "documentType": "action_capital_batch | eft_remittance | bill_payment | mixed",
   "invoiceLines": [
     {
-      "invoiceNumber": "INV-XXXX or ref number from remittance",
+      "invoiceNumber": "Invoice number exactly as printed",
+      "customerName": "Customer name for this line (from Source column)",
       "invoiceDate": "YYYY-MM-DD or null",
       "description": "Description if any",
       "originalAmount": 0.00,
       "discountAmount": 0.00,
       "adjustmentAmount": 0.00,
-      "appliedAmount": 0.00
+      "appliedAmount": 0.00,
+      "escrowed": false
     }
   ],
-  "notes": "Any special notes, deductions, or disputes mentioned"
+  "notes": "Any escrow amounts, deductions, disputes, or special items"
 }
 
 Rules:
-- invoiceLines must include EVERY line item on the remittance
-- appliedAmount = originalAmount - discountAmount - adjustmentAmount
-- If a field is not present, use null
-- All amounts must be numbers, not strings
-- invoiceNumber: include exactly as printed (e.g. "12345", "INV-12345", "HM-1234")`;
+- Include ALL invoice lines, even those with appliedAmount = 0 (mark escrowed: true)
+- For Action Capital: escrow amounts appear as negative numbers in the Escrow column
+- appliedAmount = the "Invoices Applied" column value
+- All amounts must be numbers not strings
+- If this is a mixed batch (multiple customers), set payerName to "Multiple - Action Capital Batch"
+- invoiceNumber: include exactly as printed including suffixes like HM, SD, HMA`;
 
   const response = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 4000,
       messages: [{
         role: 'user',
         content: [
@@ -762,7 +784,7 @@ If you cannot connect to QuickBooks, return sample data for testing with 3-4 rea
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }],
       mcp_servers: [{
         type: 'url',
@@ -989,7 +1011,7 @@ If you cannot complete this, return {"success": false, "message": "reason"}.`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content: postPrompt }],
         mcp_servers: [{
           type: 'url',
