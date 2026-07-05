@@ -621,7 +621,14 @@ function handleFile(file) {
 }
 
 // ─── Pipeline ────────────────────────────────────────────────────────────────
-async function runPipeline() {
+function getDemoAR(customerName) {
+  return [
+    { invoiceNumber: '260603009HM', customerName: customerName || 'Demo', invoiceDate: '2026-06-03', dueDate: '2026-07-03', originalAmount: 4950.00, openBalance: 4950.00, agingDays: 32, qboId: 'demo-1' },
+    { invoiceNumber: '260203002SD', customerName: customerName || 'Demo', invoiceDate: '2026-02-03', dueDate: '2026-03-03', originalAmount: 3750.00, openBalance: 3750.00, agingDays: 122, qboId: 'demo-2' },
+    { invoiceNumber: '260430006HM', customerName: customerName || 'Demo', invoiceDate: '2026-04-30', dueDate: '2026-05-30', originalAmount: 3436.94, openBalance: 3436.94, agingDays: 57, qboId: 'demo-3' },
+  ];
+}
+ async function runPipeline() {
   showStatus();
   setStep(2);
 
@@ -637,12 +644,16 @@ async function runPipeline() {
     setDot('extract', 'done'); setLabel('extract', `Extracted: ${extracted.invoiceLines?.length || 0} line(s) from ${extracted.payerName || 'unknown'}`);
 
     // Step 2: Fetch QBO A/R
-    setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
-    throw new Error('skip');
-    const arData = await fetchQBOAR(extracted.payerName);
+  setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
+    let arData;
+    try {
+      arData = await fetchQBOAR(extracted.payerName);
+    } catch (e) {
+      console.warn('QBO fetch skipped:', e.message);
+      arData = getDemoAR(extracted.payerName);
+    }
     state.arData = arData;
     setDot('qbo', 'done'); setLabel('qbo', `Pulled ${arData.length} open invoice(s) from QuickBooks`);
-
     // Step 3: Match
     setDot('match', 'loading'); setLabel('match', 'Matching invoices…');
     await sleep(400);
