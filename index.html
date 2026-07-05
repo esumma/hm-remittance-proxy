@@ -638,6 +638,7 @@ async function runPipeline() {
 
     // Step 2: Fetch QBO A/R
     setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
+    throw new Error('skip');
     const arData = await fetchQBOAR(extracted.payerName);
     state.arData = arData;
     setDot('qbo', 'done'); setLabel('qbo', `Pulled ${arData.length} open invoice(s) from QuickBooks`);
