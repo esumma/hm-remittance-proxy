@@ -581,7 +581,7 @@
 // ─── Config ──────────────────────────────────────────────────────────────────
 // After deploying your Cloudflare Worker, paste its URL here:
 // e.g. 'https://hm-remittance-proxy.YOUR-SUBDOMAIN.workers.dev/proxy'
-const API_URL = 'https://hm-proxy.esumma.workers.dev/proxy';
+const API_URL = 'https://hm-remittance-proxy.esumma.workers.dev/proxy';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let state = {
@@ -621,14 +621,7 @@ function handleFile(file) {
 }
 
 // ─── Pipeline ────────────────────────────────────────────────────────────────
-function getDemoAR(customerName) {
-  return [
-    { invoiceNumber: '260603009HM', customerName: customerName || 'Demo', invoiceDate: '2026-06-03', dueDate: '2026-07-03', originalAmount: 4950.00, openBalance: 4950.00, agingDays: 32, qboId: 'demo-1' },
-    { invoiceNumber: '260203002SD', customerName: customerName || 'Demo', invoiceDate: '2026-02-03', dueDate: '2026-03-03', originalAmount: 3750.00, openBalance: 3750.00, agingDays: 122, qboId: 'demo-2' },
-    { invoiceNumber: '260430006HM', customerName: customerName || 'Demo', invoiceDate: '2026-04-30', dueDate: '2026-05-30', originalAmount: 3436.94, openBalance: 3436.94, agingDays: 57, qboId: 'demo-3' },
-  ];
-}
- async function runPipeline() {
+async function runPipeline() {
   showStatus();
   setStep(2);
 
@@ -644,16 +637,11 @@ function getDemoAR(customerName) {
     setDot('extract', 'done'); setLabel('extract', `Extracted: ${extracted.invoiceLines?.length || 0} line(s) from ${extracted.payerName || 'unknown'}`);
 
     // Step 2: Fetch QBO A/R
-  setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
-    let arData;
-    try {
-      arData = await fetchQBOAR(extracted.payerName);
-    } catch (e) {
-      console.warn('QBO fetch skipped:', e.message);
-      arData = getDemoAR(extracted.payerName);
-    }
+    setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
+    const arData = await fetchQBOAR(extracted.payerName);
     state.arData = arData;
     setDot('qbo', 'done'); setLabel('qbo', `Pulled ${arData.length} open invoice(s) from QuickBooks`);
+
     // Step 3: Match
     setDot('match', 'loading'); setLabel('match', 'Matching invoices…');
     await sleep(400);
@@ -739,7 +727,7 @@ Rules:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 8000,
+      max_tokens: 4000,
       messages: [{
         role: 'user',
         content: [
@@ -802,6 +790,28 @@ async function fetchQBOAR(customerName) {
     { invoiceNumber: '260430006HM', customerName: payerHint, invoiceDate: '2026-04-30', dueDate: '2026-05-30', originalAmount: 3436.94, openBalance: 3436.94, agingDays: 57, qboId: 'demo-3' },
   ];
 }
+
+// ─── Matching logic ───────────────────────────────────────────────────────────
+function matchInvoices(extracted, arInvoices) {
+  const remitLines = extracted.invoiceLines || [];
+  const matchRows = [];
+  const unmatchedLines = [];
+  const usedARIds = new Set();
+
+  for (const line of remitLines) {
+    // Try exact invoice number match (normalize: strip leading zeros, HM-, INV- prefixes)
+    const normalizeInv = s => String(s || '').replace(/^(HM-|INV-|#)/i, '').replace(/^0+/, '').trim().toLowerCase();
+    const lineNorm = normalizeInv(line.invoiceNumber);
+
+    let matched = arInvoices.find(ar => normalizeInv(ar.invoiceNumber) === lineNorm && !usedARIds.has(ar.qboId || ar.invoiceNumber));
+
+    // Fuzzy fallback: amount match if no invoice number match
+    if (!matched && line.appliedAmount) {
+      matched = arInvoices.find(ar =>
+        Math.abs(ar.openBalance - line.appliedAmount) < 0.01 &&
+        !usedARIds.has(ar.qboId || ar.invoiceNumber)
+      );
+    }
 
     if (matched) {
       usedARIds.add(matched.qboId || matched.invoiceNumber);
@@ -964,7 +974,7 @@ If you cannot complete this, return {"success": false, "message": "reason"}.`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 8000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content: postPrompt }],
         mcp_servers: [{
           type: 'url',
