@@ -400,7 +400,7 @@
     <div class="step active" id="step-1">
       <div class="step-num">1</div>
       <div>
-        <div class="step-label">Upload Remittance</div>
+        <div class="step-label">Upload Files</div>
       </div>
     </div>
     <div class="step" id="step-2">
@@ -427,18 +427,39 @@
   <div class="section visible" id="section-upload">
     <div class="card">
       <div class="card-header">
-        <div>
-          <div class="card-title">Upload Remittance PDF</div>
-        </div>
+        <div class="card-title">Upload Files</div>
       </div>
       <div class="card-body">
-        <div class="upload-zone" id="upload-zone">
-          <div class="upload-icon">📄</div>
-          <div class="upload-main">Drop remittance PDF here</div>
-          <div class="upload-sub">or click to browse — PDF files only</div>
-          <button class="upload-btn" onclick="document.getElementById('file-input').click()">Choose file</button>
-          <input type="file" id="file-input" accept=".pdf">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+          <!-- Remittance PDF -->
+          <div>
+            <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em;">Remittance PDF</div>
+            <div class="upload-zone" id="upload-zone" style="padding:24px 16px;">
+              <div class="upload-icon" style="font-size:28px;">📄</div>
+              <div class="upload-main" style="font-size:13px;">Drop remittance PDF here</div>
+              <div class="upload-sub">PDF files only</div>
+              <button class="upload-btn" onclick="document.getElementById('file-input').click()" style="margin-top:10px;">Choose PDF</button>
+              <input type="file" id="file-input" accept=".pdf">
+            </div>
+            <div id="pdf-status" style="margin-top:8px; font-size:12px; color:var(--text-muted); display:none;"></div>
+          </div>
+          <!-- AR Report -->
+          <div>
+            <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em;">Aged AR Report (CSV or Excel)</div>
+            <div class="upload-zone" id="ar-upload-zone" style="padding:24px 16px;">
+              <div class="upload-icon" style="font-size:28px;">📊</div>
+              <div class="upload-main" style="font-size:13px;">Drop AR report here</div>
+              <div class="upload-sub">CSV or Excel (.xlsx)</div>
+              <button class="upload-btn" onclick="document.getElementById('ar-file-input').click()" style="margin-top:10px;">Choose AR File</button>
+              <input type="file" id="ar-file-input" accept=".csv,.xlsx,.xls">
+            </div>
+            <div id="ar-status" style="margin-top:8px; font-size:12px; color:var(--text-muted); display:none;"></div>
+          </div>
         </div>
+
+        <button class="btn-primary btn" id="run-btn" onclick="runPipeline()" disabled style="width:100%; padding:12px; font-size:14px; margin-bottom:16px;">
+          Extract &amp; Match →
+        </button>
 
         <div class="status-panel" id="status-panel">
           <div class="status-row" id="sr-read">
@@ -451,7 +472,7 @@
           </div>
           <div class="status-row" id="sr-qbo">
             <div class="status-dot dot-pending" id="dot-qbo"></div>
-            <span id="label-qbo">Fetching open A/R from QuickBooks…</span>
+            <span id="label-qbo">Parsing AR report…</span>
           </div>
           <div class="status-row" id="sr-match">
             <div class="status-dot dot-pending" id="dot-match"></div>
@@ -577,6 +598,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // ─── Config ──────────────────────────────────────────────────────────────────
 // After deploying your Cloudflare Worker, paste its URL here:
@@ -587,8 +609,9 @@ const API_URL = 'https://hm-proxy.esumma.workers.dev/proxy';
 let state = {
   pdfBase64: null,
   pdfName: null,
-  extracted: null,
   arData: null,
+  arFileName: null,
+  extracted: null,
   matchRows: [],
   unmatchedLines: []
 };
@@ -596,28 +619,142 @@ let state = {
 // ─── Upload handling ──────────────────────────────────────────────────────────
 const uploadZone = document.getElementById('upload-zone');
 const fileInput = document.getElementById('file-input');
+const arUploadZone = document.getElementById('ar-upload-zone');
+const arFileInput = document.getElementById('ar-file-input');
 
+function checkRunReady() {
+  const btn = document.getElementById('run-btn');
+  if (state.pdfBase64 && state.arData) {
+    btn.disabled = false;
+  }
+}
+
+// PDF upload
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
 uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('drag-over');
   const f = e.dataTransfer.files[0];
-  if (f && f.type === 'application/pdf') handleFile(f);
+  if (f && f.type === 'application/pdf') handlePDF(f);
   else showToast('Please drop a PDF file', 'error');
 });
 uploadZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handlePDF(e.target.files[0]); });
 
-function handleFile(file) {
+function handlePDF(file) {
   state.pdfName = file.name;
   const reader = new FileReader();
-  reader.onload = async (e) => {
-    const base64 = e.target.result.split(',')[1];
-    state.pdfBase64 = base64;
-    await runPipeline();
+  reader.onload = (e) => {
+    state.pdfBase64 = e.target.result.split(',')[1];
+    const status = document.getElementById('pdf-status');
+    status.style.display = 'block';
+    status.innerHTML = `✅ <strong>${file.name}</strong> loaded`;
+    uploadZone.style.borderColor = 'var(--green)';
+    checkRunReady();
   };
   reader.readAsDataURL(file);
+}
+
+// AR file upload
+arUploadZone.addEventListener('dragover', e => { e.preventDefault(); arUploadZone.classList.add('drag-over'); });
+arUploadZone.addEventListener('dragleave', () => arUploadZone.classList.remove('drag-over'));
+arUploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  arUploadZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleARFile(f);
+});
+arUploadZone.addEventListener('click', () => arFileInput.click());
+arFileInput.addEventListener('change', e => { if (e.target.files[0]) handleARFile(e.target.files[0]); });
+
+function handleARFile(file) {
+  state.arFileName = file.name;
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  if (ext === 'csv') {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const arData = parseARCSV(e.target.result);
+      state.arData = arData;
+      const status = document.getElementById('ar-status');
+      status.style.display = 'block';
+      status.innerHTML = `✅ <strong>${file.name}</strong> — ${arData.length} open invoice(s) loaded`;
+      arUploadZone.style.borderColor = 'var(--green)';
+      checkRunReady();
+    };
+    reader.readAsText(file);
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const XLSX = window.XLSX;
+        if (!XLSX) throw new Error('Excel parser not loaded');
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const csv = XLSX.utils.sheet_to_csv(ws);
+        const arData = parseARCSV(csv);
+        state.arData = arData;
+        const status = document.getElementById('ar-status');
+        status.style.display = 'block';
+        status.innerHTML = `✅ <strong>${file.name}</strong> — ${arData.length} open invoice(s) loaded`;
+        arUploadZone.style.borderColor = 'var(--green)';
+        checkRunReady();
+      } catch (err) {
+        showToast('Could not parse Excel file: ' + err.message, 'error');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+function parseARCSV(csvText) {
+  const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+
+  // Parse header row
+  const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
+
+  // Map common column name variations
+  const col = (names) => {
+    for (const n of names) {
+      const idx = headers.findIndex(h => h.includes(n));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const invCol = col(['invoice', 'inv #', 'inv#', 'number', 'num', 'transaction']);
+  const custCol = col(['customer', 'client', 'name', 'company']);
+  const balCol = col(['open balance', 'balance', 'amount due', 'remaining', 'open']);
+  const origCol = col(['original', 'total', 'invoice amount', 'amount']);
+  const dateCol = col(['invoice date', 'date', 'inv date']);
+  const dueCol = col(['due date', 'due']);
+  const agingCol = col(['aging', 'days', 'age']);
+
+  const results = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim());
+    if (cols.length < 2) continue;
+
+    const invNum = invCol >= 0 ? cols[invCol] : '';
+    if (!invNum || invNum === '' || invNum.toLowerCase() === 'total') continue;
+
+    const balance = balCol >= 0 ? parseFloat(cols[balCol]?.replace(/[$,]/g, '') || 0) : 0;
+    if (balance <= 0) continue;
+
+    results.push({
+      invoiceNumber: invNum,
+      customerName: custCol >= 0 ? cols[custCol] : '',
+      invoiceDate: dateCol >= 0 ? cols[dateCol] : null,
+      dueDate: dueCol >= 0 ? cols[dueCol] : null,
+      originalAmount: origCol >= 0 ? parseFloat(cols[origCol]?.replace(/[$,]/g, '') || 0) : balance,
+      openBalance: balance,
+      agingDays: agingCol >= 0 ? parseInt(cols[agingCol] || 0) : 0,
+      qboId: invNum
+    });
+  }
+  return results;
 }
 
 // ─── Pipeline ────────────────────────────────────────────────────────────────
@@ -636,11 +773,11 @@ async function runPipeline() {
     state.extracted = extracted;
     setDot('extract', 'done'); setLabel('extract', `Extracted: ${extracted.invoiceLines?.length || 0} line(s) from ${extracted.payerName || 'unknown'}`);
 
-    // Step 2: Fetch QBO A/R
-    setDot('qbo', 'loading'); setLabel('qbo', 'Fetching open A/R from QuickBooks…');
-    const arData = await fetchQBOAR(extracted.payerName);
-    state.arData = arData;
-    setDot('qbo', 'done'); setLabel('qbo', `Pulled ${arData.length} open invoice(s) from QuickBooks`);
+    // Step 2: Use uploaded AR data
+    setDot('qbo', 'loading'); setLabel('qbo', 'Parsing AR report…');
+    await sleep(300);
+    const arData = state.arData || [];
+    setDot('qbo', 'done'); setLabel('qbo', `Loaded ${arData.length} open invoice(s) from AR report`);
 
     // Step 3: Match
     setDot('match', 'loading'); setLabel('match', 'Matching invoices…');
@@ -656,7 +793,6 @@ async function runPipeline() {
   } catch (err) {
     console.error(err);
     showToast('Error: ' + err.message, 'error');
-    // Show which step failed
     ['read','extract','qbo','match'].forEach(k => {
       if (document.getElementById('dot-'+k).className.includes('loading'))
         setDot(k, 'error');
@@ -727,7 +863,7 @@ Rules:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 8000,
+      max_tokens: 4000,
       messages: [{
         role: 'user',
         content: [
@@ -974,7 +1110,7 @@ If you cannot complete this, return {"success": false, "message": "reason"}.`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 8000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content: postPrompt }],
         mcp_servers: [{
           type: 'url',
@@ -1043,8 +1179,14 @@ function setStep(n) {
 }
 
 function startOver() {
-  state = { pdfBase64: null, pdfName: null, extracted: null, arData: null, matchRows: [], unmatchedLines: [] };
+  state = { pdfBase64: null, pdfName: null, arData: null, arFileName: null, extracted: null, matchRows: [], unmatchedLines: [] };
   fileInput.value = '';
+  arFileInput.value = '';
+  document.getElementById('pdf-status').style.display = 'none';
+  document.getElementById('ar-status').style.display = 'none';
+  document.getElementById('upload-zone').style.borderColor = '';
+  document.getElementById('ar-upload-zone').style.borderColor = '';
+  document.getElementById('run-btn').disabled = true;
   document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
   document.getElementById('section-upload').classList.add('visible');
   document.getElementById('status-panel').classList.remove('visible');
